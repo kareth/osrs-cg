@@ -529,7 +529,8 @@
       if (weapon == this.player.prayer) {
         this.health.subUnavoidable(config.hunleffUnavoidableDamage)
       } else {
-        this.health.subAvoidable(config.hunleffAvoidableDamage)
+        this.health.subUnavoidable(config.hunleffUnavoidableDamage)
+        this.health.subAvoidable(config.hunleffAvoidableDamage - config.hunleffUnavoidableDamage)
       }
       const proj = new Shadow(this.boss.position)
       proj.move(this.player.position)
