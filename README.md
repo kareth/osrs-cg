@@ -15,5 +15,6 @@ After making a copy of the page, config variable can be edited to tweak the beha
 2. No support for augment prayers.
 3. Limited sound cues. Using Hunllef Helper is recommended.
 4. Only last Hunllef stage is simulated. 
-5. No easy way to edit config other than changing the page content.
-6. Damage numbers are rough estimates and likely don't match reality well.
+5. Hunleff stomp doesn't delay its next attack.
+6. No easy way to edit config other than changing the page content.
+7. Damage numbers are rough estimates and likely don't match reality well.
