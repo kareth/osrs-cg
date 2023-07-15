@@ -11,6 +11,12 @@
         <div style="text-align: center;">Survived ticks:</div>
         <div id="alive_ticks" style="font-weight: bold; margin-bottom: 5px;"></div>
       </div>
+      <div style="text-align: center; margin: 10px;">
+        <div >Damage efficiency:</div>
+        <div id="alive_damage_eff" style="font-weight: bold; margin-bottom: 10px;">100%</div>
+        <div style="text-align: center;">Survival efficiency:</div>
+        <div id="alive_ticks_eff" style="font-weight: bold; margin-bottom: 5px;">100%</div>
+      </div>
     </div>
     <canvas id="inventory" width="200" height="350"></canvas>
     <canvas id="prayer_book" width="200" height="350" style="display: none;"></canvas>
@@ -22,9 +28,10 @@
   <div>Floor hits: <span id="floor_hits"></span>
   <div>Boss hits: <span id="boss_hits"></span>
   <div>Avoidable DMG: <span id="avoidable_dmg"></span>
-  <div>Correct attacks: <span id="correct_attacks"></span>%
-  <div>Failed attacks: <span id="failed_attacks"></span>%
-  <div>Stalled attacks: <span id="stalled_attacks"></span>%
+  <div>Correct attack time: <span id="correct_attacks"></span>%
+  <div>Failed attack time: <span id="failed_attacks"></span>%
+  <div>Eating time: <span id="eat_attacks"></span>%
+  <div>Stalled time: <span id="stalled_attacks"></span>%
   <div>Estimated fish: <span id="estimated_fish"></span>
   <div>Tips: Prayerbook/Inventory on 1/2. Click hunleff helper first and then immediately refresh page.</div>
 </div>
@@ -489,14 +496,14 @@
       this.prevFloor = -1
       this.tornadoOffset = rnd(config.tornadoTicks)
 
-      this.deathTick = null
-      this.damageAtDeath = null
+      this.deathScore = null
       this.tornadoHits = 0
       this.floorHits = 0
       this.bossHits = 0
       this.tick = -1
       this.failedHits = 0
       this.lastBossHit = 0  // TODO put into boss class.
+      this.foodEaten = 0
     }
 
     click(tile) {
@@ -507,6 +514,7 @@
     eat() {
       this.player.eat()
       this.health.add(config.foodHealing)
+      this.foodEaten++
     }
 
     cast(weapon) {
@@ -519,9 +527,9 @@
 
     bossCast(weapon) {
       if (weapon == this.player.prayer) {
-        this.health.sub(config.hunleffUnavoidableDamage)
+        this.health.subUnavoidable(config.hunleffUnavoidableDamage)
       } else {
-        this.health.sub(config.hunleffAvoidableDamage)
+        this.health.subAvoidable(config.hunleffAvoidableDamage)
       }
       const proj = new Shadow(this.boss.position)
       proj.move(this.player.position)
@@ -575,38 +583,24 @@
       for (const tornado of this.tornadoes) {
         if (tornado.position.eq(this.player.position)) {
           this.tornadoHits++
-          this.health.sub(config.tornadoDamage)
+          this.health.subAvoidable(config.tornadoDamage)
         }
       }
       if (this.floor.active && this.floor.contains(this.player.position)) {
         this.floorHits++
-        this.health.sub(config.floorDamage)
+        this.health.subAvoidable(config.floorDamage)
       }
       if (this.boss.area.contains(this.player.position) && this.lastBossHit + config.bossAttackSpeed <= this.tick) {
         this.bossHits++
         this.lastBossHit = this.tick
-        this.health.sub(config.bossDamage)
+        this.health.subAvoidable(config.bossDamage)
       }
       if (prevDmg < totaldmg() && config.sounds) beep()
-      
-      if (this.health.value <= 0 && this.deathTick == null) {
-        this.deathTick = this.tick
-        this.damageAtDeath = this.boss.damageTaken
-      }
 
+      if (this.tick == 0) return;
       // Info
       document.getElementById("ticks").innerHTML = this.tick
       document.getElementById("time").innerHTML = (this.tick * 0.6).toFixed(1)
-
-      if (this.deathTick) {
-        document.getElementById("alive_damage").style.color = "red"
-        document.getElementById("alive_damage").innerHTML = this.damageAtDeath
-        document.getElementById("alive_ticks").style.color = "red"
-        document.getElementById("alive_ticks").innerHTML = this.deathTick
-      } else {
-        document.getElementById("alive_damage").innerHTML = this.boss.damageTaken
-        document.getElementById("alive_ticks").innerHTML = this.tick
-      }
 
       // Survival Scores
       document.getElementById("tornado_hits").innerHTML = this.tornadoHits
@@ -618,17 +612,45 @@
       document.getElementById("avoidable_dmg").innerHTML = avoidableDamage.toFixed()
 
       // Dps
-      const failed = this.failedHits
-      const total = this.player.attacksDone
+      const failed = this.failedHits * config.attackSpeed
+      const total = this.player.attacksDone * config.attackSpeed - (this.player.attackCD - this.player.eatCD)
+      const eat = this.foodEaten * config.eatTime - this.player.eatCD
       const correct = total - failed
-      const possible = Math.floor((this.tick + 3) / 4)
+      const possible = Math.floor(this.tick)
 
       document.getElementById("correct_attacks").innerHTML = (correct / possible * 100).toFixed()
       document.getElementById("failed_attacks").innerHTML = (failed / possible * 100).toFixed()
-      document.getElementById("stalled_attacks").innerHTML = ((possible - total) / possible * 100).toFixed();
-      const dpsPotential = correct / possible
+      document.getElementById("eat_attacks").innerHTML = (eat / possible * 100).toFixed();
+      document.getElementById("stalled_attacks").innerHTML = ((possible - total - eat) / possible * 100).toFixed();
+      const dpsPotential = (correct + eat) / possible
       document.getElementById("estimated_fish").innerHTML =
         12 / dpsPotential + (avoidableDamage / this.tick * config.perfectFightTicks / dpsPotential) / 18
+
+      const survivalPotential = this.health.unavoidableDamage / (this.health.avoidableDamage + this.health.unavoidableDamage)
+
+      const currentScore = {
+        tick: this.tick,
+        damage: this.boss.damageTaken,
+        damage_eff: dpsPotential,
+        survival_eff: survivalPotential,
+      }
+
+      // TriggerDeath
+      if (this.health.value <= 0 && this.deathScore == null) this.deathScore = currentScore
+
+      // Main score
+      if (this.deathScore != null) {
+        for (const elem of ["alive_damage", "alive_ticks", "alive_damage_eff", "alive_ticks_eff"]) {
+          document.getElementById(elem).style.color = "red"
+        }
+      }
+      {
+        const score = this.deathScore == null ? currentScore : this.deathScore;
+        document.getElementById("alive_damage").innerHTML = score.damage
+        document.getElementById("alive_ticks").innerHTML = score.tick
+        document.getElementById("alive_damage_eff").innerHTML = (score.damage_eff * 100).toFixed() + "%"
+        document.getElementById("alive_ticks_eff").innerHTML = (score.survival_eff * 100).toFixed() + "%"
+      }
     }
   }
 
@@ -776,14 +798,22 @@
       this.canvas = document.getElementById(elementId)
       this.ctx = this.canvas.getContext("2d")
       this.value = config.maxHealth
+      this.avoidableDamage = 0
+      this.unavoidableDamage = 0
     }
     add(value) {
       this.value += value
       this.value = Math.min(config.maxHealth, this.value)
       this.draw()
     }
-    sub(value) {
+    subAvoidable(value) {
       this.value -= value
+      this.avoidableDamage += value
+      this.draw()
+    }
+    subUnavoidable(value) {
+      this.value -= value
+      this.unavoidableDamage += value
       this.draw()
     }
     draw() {
@@ -800,7 +830,8 @@
       this.ctx.font = fontSize + "px Arial"
       this.ctx.textAlign = "center"
       this.ctx.fillStyle = "#fff"
-      this.ctx.fillText(Math.floor(this.value), s / 2, s / 2 + fontSize * 0.4)
+      const val = Math.floor(this.value)
+      this.ctx.fillText(val <-999 ? "-inf" : val , s / 2, s / 2 + fontSize * 0.4)
     }
   }
 
