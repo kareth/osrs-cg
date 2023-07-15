@@ -1,0 +1,831 @@
+<div style="display: flex;">
+  <div>
+    <canvas id = "board" width="500" height="500"></canvas>
+  </div>
+  <div style="margin: 10px;">
+    <div style = "margin-bottom: 10px; display: flex;">
+      <canvas id="health" width="100" height="100"></canvas>
+      <div style="text-align: center; margin: 10px;">
+        <div >Damage:</div>
+        <div id="alive_damage" style="font-weight: bold; margin-bottom: 10px;"></div>
+        <div style="text-align: center;">Survived ticks:</div>
+        <div id="alive_ticks" style="font-weight: bold; margin-bottom: 5px;"></div>
+      </div>
+    </div>
+    <canvas id="inventory" width="200" height="350"></canvas>
+    <canvas id="prayer_book" width="200" height="350" style="display: none;"></canvas>
+  </div>
+</div>
+<div style="margin: 10px;">
+  <div>Ticks: <span id="ticks"></span> (<span id="time"></span>s)</div>
+  <div>Tornado hits: <span id="tornado_hits"></span>
+  <div>Floor hits: <span id="floor_hits"></span>
+  <div>Boss hits: <span id="boss_hits"></span>
+  <div>Avoidable DMG: <span id="avoidable_dmg"></span>
+  <div>Correct attacks: <span id="correct_attacks"></span>%
+  <div>Failed attacks: <span id="failed_attacks"></span>%
+  <div>Stalled attacks: <span id="stalled_attacks"></span>%
+  <div>Estimated fish: <span id="estimated_fish"></span>
+  <div>Tips: Prayerbook/Inventory on 1/2. Click hunleff helper first and then immediately refresh page.</div>
+</div>
+
+<script>
+  const config = {
+    sounds: true,
+    showPathing: true,
+    tickLengthMillis: 600,
+    tornadoTicks: 20,
+    noTornadoTicks: 30,
+    lavaNotificationTicks: 3,
+    lavaTicks: 6,
+    tornadoDamage: 20,
+    floorDamage: 20,
+    bossDamage: 34,
+    bossAttackSpeed: 6,
+    attackSpeed: 4,
+    perfectFightTicks: 200,
+    eatTime: 3,
+    eatTimeAttackCD: 3,
+    hunleffPrayerSwapHits: 6,
+    maxHealth: 99,
+    foodHealing: 18,
+    playerDamage: 12,
+    hunleffAttackCD: 5,
+    hunleffFirstAttackCD: 2, //cannot be 0
+    hunleffAttackTypeCD: 4,
+    hunleffFirstAttackTypeCD: 3,
+    hunleffUnavoidableDamage: 6.5,
+    hunleffAvoidableDamage: 25,
+  }
+
+  const colors = {
+    bg: "#351f1c",
+    border: "#000000",
+    playerTileBorder: "#00ffff",
+    targetBorder: "#aaaaaa",
+    pathBorder: "#56520d",
+    
+    player: "#ffea00",
+    playerBorder: "#ffc600",
+    
+    playerAttack: "#00aeff",
+    playerAttackBorder: "#007eff",
+    
+    playerCast: "#00f6ff",
+    playerCastBorder: "#00c0ff",
+
+    playerPrayer: "#00cc00",
+    playerPrayerBorder: "#00aa00",
+
+    weapon: "#000",
+    
+    tornado: "#b4330b",
+    tornadoBorder: "#ff3c00",
+
+    lava: "#b4330b",
+    
+    lava: "#604d11",
+    lavaBorder: "#80681e",
+    lavaNotification: "#4e0e0b",
+    lavaNotificationBorder: "#843733",
+
+    boss: "rgba(256, 256, 256, 0.2)",
+    bossBorder: "rgba(256, 256, 256, 0.5)",
+    hunleffPrayer: "#fff",
+
+    health: "#b4330b",
+    noHealth: "#000",
+  }
+
+  class Coords {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+    }
+    clone() {
+      return new Coords(this.x, this.y)
+    }
+    eq(rhs) { return this.x == rhs.x && this.y == rhs.y }
+    sub(rhs) { return new Coords(this.x - rhs.x, this.y - rhs.y) }
+    add(rhs) {  return new Coords(this.x + rhs.x, this.y + rhs.y) }
+    div(rhs) { return new Coords(this.x / rhs, this.y / rhs) }
+    multiply(rhs) { return new Coords(this.x * rhs, this.y * rhs) }
+  }
+
+  class Area {
+    constructor(point, width, height) {
+      this.start = point.clone()
+      this.limit = new Coords(point.x + width, point.y + height)
+      this.width = width
+      this.height = height
+    }
+    clone() { return new Area(this.start.clone(), this.limit.x - this.start.x, this.limit.y - this.start.y); }
+    tiles() {
+      const tiles = []
+      for (var x = this.start.x; x < this.limit.x; x++) {
+        for (var y = this.start.y; y < this.limit.y; y++) {
+          tiles.push(new Coords(x, y))
+        }
+      }
+      return tiles
+    }
+    contains(point) {
+      return point.x >= this.start.x && point.x < this.limit.x &&
+             point.y >= this.start.y && point.y < this.limit.y
+    }
+  }
+
+  const make2darr = (w, h, value = null) => {
+    var col = [], ret = []
+    for (var i = 0; i < h; ++i) col.push(value)
+    for (var i = 0; i < w; ++i) ret.push([...col])
+    return ret;
+  }
+
+  // A fluid shadow following the true position of a unit
+  class Shadow {
+    constructor(position) {
+      this.position = position.clone()
+      this.target = position.clone()
+      this.movementStart = Date.now()
+    }
+    current() {
+      const progress = (Date.now() - this.movementStart) / config.tickLengthMillis
+      return this.position.add(this.target.sub(this.position).multiply(progress))
+    }
+    move(position) {
+      this.position = this.target.clone()
+      this.target = position.clone()
+      this.movementStart = Date.now() 
+    }
+  }
+
+  class Unit {
+    constructor(game, position, run, immobilizeTicks = 0) {
+      // Core
+      this.position = position.clone();
+      this.target = position.clone();
+      this.shadow = new Shadow(position.clone());
+      this.path = []
+      this.run = run
+      // Combat
+      this.game = game
+      this.attacking = false
+      this.casting = immobilizeTicks > 0
+      this.attackCD = 0
+      this.attacksDone = 0
+      this.weapon = "B"
+      this.prayer = "B"
+      this.eatCD = 0
+    }
+
+    attack() {
+      var additional_wait = !this.target.eq(this.position)
+      this.setTarget(this.position)
+      this.immobilizeTicks = config.attackImmobilizeTicks + additional_wait 
+      this.attacking = true
+    }
+
+    cast() {
+      this.casting = true;
+      this.attackCD = config.attackSpeed
+      this.attacksDone++;
+      this.game.cast(this.weapon)
+    }
+    swapWeapon() {
+      this.weapon = this.weapon == "B" ? "S" : "B"    
+    }
+    eat() {
+      this.attackCD += config.eatTimeAttackCD
+      this.eatCD = config.eatTime
+      // TODO stop attacking?
+    }
+    canEat() {
+      return this.eatCD == 0
+    }
+
+    get displayPosition() { return this.shadow.current() }
+
+    setTarget(target) {
+      this.attacking = false;
+      this.target = target
+      this.path = Unit.computePath(this.position, this.target, this.run)
+    }
+
+    move() {
+      if (this.path.length > 0 && !this.casting) {
+        this.position = this.path[0]
+        this.path.shift()
+      }
+      this.shadow.move(this.position)
+      // Combat
+      this.casting = false
+      if (this.attackCD > 0) this.attackCD--
+      if (this.eatCD > 0) this.eatCD--
+      if (this.attacking && this.attackCD == 0) this.cast()
+    }
+
+    static computePath(start, target, run) {
+      var dist = make2darr(12, 12), prev = make2darr(12, 12);
+      const d = [{x: -1, y: 0}, {x: 1, y: 0}, {x: 0, y: 1}, {x:0, y: -1}, {x:  -1, y: 1}, {x: 1, y: 1}, {x: -1, y: -1}, {x: 1, y: -1}]
+      // BFS
+      var queue = [start.clone()]
+      dist[start.x][start.y] = 0
+      while (queue.length > 0) {
+        const pos = queue[0]; queue.shift()
+        if (pos.x == target.x && pos.y == target.y) break;
+        for (var i = 0; i < d.length; ++i) {
+          const next = new Coords(pos.x + d[i].x, pos.y + d[i].y)
+          if (next.x < 0 || next.y < 0 || next.x >=12 || next.y >= 12) continue
+          if (dist[next.x][next.y] != null) continue
+          dist[next.x][next.y] = 1 + dist[pos.x][pos.y]
+          prev[next.x][next.y] = pos.clone()
+          queue.push(next.clone());
+        }
+      }
+      // Backtrack
+      var path = [];
+      var bt = target.clone()
+      while(true) {
+        if (bt.x == start.x && bt.y == start.y) break
+        path.push(bt.clone())
+        bt = prev[bt.x][bt.y].clone()
+      }
+      path = path.reverse();
+      if (!run) return path;
+      // Checkpoints (run)
+      var runPath = []
+      for (var i = 1; i < path.length; i += 2) runPath.push(path[i].clone())
+      if (path.length % 2 == 1) runPath.push(path[path.length - 1].clone())
+      return runPath;
+    }
+  }
+
+  class Floor {
+    constructor(areas) {
+      this.areas = areas
+      this.active = false
+    }
+    tiles() {
+      const tiles = []
+      for (const area of this.areas) {
+        for (const tile of area.tiles()) tiles.push(tile.clone())
+      }
+      return tiles
+    }
+    clone() {
+      const areas = []
+      for (const area of this.areas) areas.push(area.clone())
+      return new Floor(areas)
+    }
+    contains(position) {
+      for (const area of this.areas) if (area.contains(position)) return true;
+      return false;
+    }
+  }
+
+  // Stage 3
+  const floorPatterns = [
+    new Floor([new Area(new Coords(3, 3), 6, 6)]),
+    new Floor([new Area(new Coords(0, 0), 4, 4), new Area(new Coords(0, 8), 4, 4),
+               new Area(new Coords(8, 0), 4, 4), new Area(new Coords(8, 8), 4, 4)]),
+    new Floor([new Area(new Coords(1, 1), 4, 4), new Area(new Coords(1, 7), 4, 4),
+               new Area(new Coords(7, 1), 4, 4), new Area(new Coords(7, 7), 4, 4)]),
+    new Floor([new Area(new Coords(0, 0), 12, 2), new Area(new Coords(0, 10), 12, 2),
+               new Area(new Coords(0, 0), 2, 12), new Area(new Coords(10, 0), 2, 12)]),
+    new Floor([new Area(new Coords(0, 0), 3, 3), new Area(new Coords(0, 9), 3, 3),
+               new Area(new Coords(9, 0), 3, 3), new Area(new Coords(9, 9), 3, 3),
+               new Area(new Coords(4, 4), 4, 4)]),
+  ]
+
+  class Board {
+    constructor(elementId, game) {
+      this.canvas = document.getElementById(elementId)
+      this.ctx = this.canvas.getContext("2d")
+      this.tileSize =  500 / 12
+      this.game = game
+
+      const that = this
+      setInterval(function() { that.draw(); }, 20)
+      
+      this.canvas.addEventListener('click', (e) => {
+        const tile = new Coords(Math.floor(e.offsetX / this.tileSize),
+                                Math.floor(e.offsetY / this.tileSize));
+        this.game.click(tile)
+      })
+    }
+
+    drawTile(pos, color, borderColor) {
+      const tileSize = this.tileSize
+      if (color != null) {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+      }
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.strokeRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+    }
+
+    drawUnit (pos, color, borderColor, scale = 3) {
+      const tileSize = this.tileSize
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x * tileSize + 0.5 * tileSize, pos.y * tileSize + 0.5 * tileSize, tileSize / scale, 0, 2 * Math.PI)
+      this.ctx.fillStyle = color
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.fill();
+      this.ctx.stroke();
+    }
+
+    drawArea (area, color, borderColor) {
+      const tileSize = this.tileSize
+      if (color != null) {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(area.start.x * tileSize, area.start.y * tileSize, area.width * tileSize, area.height * tileSize)
+      }
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.strokeRect(area.start.x * tileSize, area.start.y * tileSize, area.width * tileSize, area.height * tileSize)
+    }
+    
+    drawText(pos, text, color) {
+      const fontSize = Math.floor(this.tileSize * 0.5)
+      this.ctx.font = fontSize + "px Arial"
+      this.ctx.textAlign = "center"
+      this.ctx.fillStyle = color
+      this.ctx.fillText(text, (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
+    }
+    drawPrayer (pos, prayer, color, borderColor) {
+      const tileSize = this.tileSize
+      const offsetX = 0.5 * tileSize, offsetY = 0 * tileSize
+
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x * tileSize + offsetX, pos.y * tileSize + offsetY, tileSize / 5, 0, 2 * Math.PI)
+      this.ctx.fillStyle = color
+      this.ctx.lineWidth = tileSize / 30
+      this.ctx.strokeStyle = borderColor
+      this.ctx.fill();
+      this.ctx.stroke();
+      
+      const fontSize = Math.floor(tileSize * 0.3)
+      this.ctx.font = fontSize + "px Arial"
+      this.ctx.textAlign = "center"
+      this.ctx.fillStyle = "#fff"
+      this.ctx.fillText(prayer, pos.x * tileSize + offsetX, pos.y * tileSize + offsetY + fontSize * 0.4)
+    }
+
+    draw() {
+      const game = this.game
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+      // Board
+      for (var x = 0; x < 12; ++x) {
+        for (var y = 0; y < 12; ++y) {
+          this.drawTile(new Coords(x, y), colors.bg, colors.border)
+        }
+      }
+      // Floor
+      for (const tile of game.floor.tiles()){
+        if (game.floor.active)
+          this.drawTile(tile, colors.lava, colors.lavaBorder)
+        else
+          this.drawTile(tile, colors.lavaNotification, colors.lavaNotificationBorder)
+      } 
+      // Boss
+      this.drawArea(game.boss.area, colors.boss, colors.bossBorder)
+      this.drawText(game.boss.area.start.add(new Coords(2, 2)), game.boss.prayer, colors.hunleffPrayer)
+      this.drawText(game.boss.area.start.add(new Coords(2, 0)), game.boss.damageTaken, colors.hunleffPrayer)
+      this.drawText(game.boss.area.start.add(new Coords(2, 4)), game.boss.weapon, colors.tornadoBorder)
+      // Pathing
+      if (config.showPathing) {
+        for (const tile of game.player.path) {
+          this.drawTile(tile, null, colors.pathBorder)
+        } 
+      }
+      // Player
+      this.drawTile(game.player.target, null, colors.targetBorder)
+      this.drawTile(game.player.position, null, colors.playerTileBorder)
+      if (game.player.casting) {
+        this.drawUnit(game.player.displayPosition, colors.playerCast, colors.playerCastBorder)
+      } else if (game.player.attacking) {
+        this.drawUnit(game.player.displayPosition, colors.playerAttack, colors.playerAttackBorder)
+      } else {
+        this.drawUnit(game.player.displayPosition, colors.player, colors.playerBorder)
+      }
+      if (game.player.weapon != null) {
+        this.drawText(game.player.displayPosition, game.player.weapon, colors.weapon)
+      }
+      if (game.player.prayer != null) {
+        this.drawPrayer(game.player.displayPosition, game.player.prayer, colors.playerPrayer, colors.playerPrayerBorder)
+      }
+      // Tornadoes
+      for (const tornado of game.tornadoes) {
+        this.drawUnit(tornado.displayPosition, colors.tornado, colors.tornadoBorder)
+      }
+      // Projectiles
+      for (const p of game.badProjectiles) {
+        this.drawUnit(p.current(), colors.tornado, colors.tornadoBorder, 12)
+      }
+      for (const p of game.goodProjectiles) {
+        this.drawUnit(p.current(), colors.playerAttack, colors.playerAttackBorder, 12)
+      }
+    }
+  }
+
+  const rnd = (limit) => Math.floor(Math.random() * limit)
+
+  function beep() {
+    var snd = new Audio("data:audio/wav;base64,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qJrx4KOQjahZxWbcZgztj2c49nKmkId44S71j0c8eV9yDK6uPRzx5X18eDvjvQ6yKo9ZSS6l//8elePK/Lf//IInrOF/FvDoADYAGBMGb7FtErm5MXMlmPAJQVgWta7Zx2go+8xJ0UiCb8LHHdftWyLJE0QIAIsI+UbXu67dZMjmgDGCGl1H+vpF4NSDckSIkk7Vd+sxEhBQMRU8j/12UIRhzSaUdQ+rQU5kGeFxm+hb1oh6pWWmv3uvmReDl0UnvtapVaIzo1jZbf/pD6ElLqSX+rUmOQNpJFa/r+sa4e/pBlAABoAAAAA3CUgShLdGIxsY7AUABPRrgCABdDuQ5GC7DqPQCgbbJUAoRSUj+NIEig0YfyWUho1VBBBA//uQZB4ABZx5zfMakeAAAAmwAAAAF5F3P0w9GtAAACfAAAAAwLhMDmAYWMgVEG1U0FIGCBgXBXAtfMH10000EEEEEECUBYln03TTTdNBDZopopYvrTTdNa325mImNg3TTPV9q3pmY0xoO6bv3r00y+IDGid/9aaaZTGMuj9mpu9Mpio1dXrr5HERTZSmqU36A3CumzN/9Robv/Xx4v9ijkSRSNLQhAWumap82WRSBUqXStV/YcS+XVLnSS+WLDroqArFkMEsAS+eWmrUzrO0oEmE40RlMZ5+ODIkAyKAGUwZ3mVKmcamcJnMW26MRPgUw6j+LkhyHGVGYjSUUKNpuJUQoOIAyDvEyG8S5yfK6dhZc0Tx1KI/gviKL6qvvFs1+bWtaz58uUNnryq6kt5RzOCkPWlVqVX2a/EEBUdU1KrXLf40GoiiFXK///qpoiDXrOgqDR38JB0bw7SoL+ZB9o1RCkQjQ2CBYZKd/+VJxZRRZlqSkKiws0WFxUyCwsKiMy7hUVFhIaCrNQsKkTIsLivwKKigsj8XYlwt/WKi2N4d//uQRCSAAjURNIHpMZBGYiaQPSYyAAABLAAAAAAAACWAAAAApUF/Mg+0aohSIRobBAsMlO//Kk4soosy1JSFRYWaLC4qZBYWFRGZdwqKiwkNBVmoWFSJkWFxX4FFRQWR+LsS4W/rFRb/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////VEFHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU291bmRib3kuZGUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMjAwNGh0dHA6Ly93d3cuc291bmRib3kuZGUAAAAAAAAAACU=");  
+    snd.play();
+  }
+
+  class Hunleff {
+    constructor(game, area) {
+      this.area = area
+      this.game = game
+      this.weapon = "B"
+      this.prayer = "S"
+      this.prayerCD = config.hunleffPrayerSwapHits
+      this.damageTaken = 0
+      this.attackCD = config.hunleffFirstAttackCD
+      this.weaponCD = config.hunleffFirstAttackTypeCD
+    }
+    hit(weapon) {
+      if (weapon != this.prayer) {
+        this.prayerCD--;
+        this.damageTaken += config.playerDamage
+      }
+    }
+    move() {
+      if (this.prayerCD == 0) {
+        this.prayer = this.prayer == "B" ? "S" : "B"
+        this.prayerCD = config.hunleffPrayerSwapHits
+      }
+      this.attackCD--
+      if (this.attackCD == 0) {
+        this.game.bossCast(this.weapon)
+        this.attackCD = config.hunleffAttackCD
+        this.weaponCD--
+      }
+      if (this.weaponCD == 0) {
+        this.weapon = this.weapon == "B" ? "S" : "B"
+        this.weaponCD = config.hunleffAttackTypeCD
+      }
+    }
+    get position() {
+      return this.area.start.add(new Coords(2, 2))
+    }
+  }
+
+  class Game {
+    constructor() {
+      this.player = new Unit(this, new Coords(5, 3), true);
+      this.health = new Health("health")
+      this.health.draw()
+      this.boss = new Hunleff(this, new Area(new Coords(rnd(5) + 1, rnd(5) + 1), 5, 5));
+      this.tornadoes = []
+      this.floor = new Floor([])
+      this.goodProjectiles = []
+      this.badProjectiles = []
+      this.prevFloor = -1
+      this.tornadoOffset = rnd(config.tornadoTicks)
+
+      this.deathTick = null
+      this.damageAtDeath = null
+      this.tornadoHits = 0
+      this.floorHits = 0
+      this.bossHits = 0
+      this.tick = -1
+      this.failedHits = 0
+      this.lastBossHit = 0  // TODO put into boss class.
+    }
+
+    click(tile) {
+      if (this.boss.area.contains(tile)) this.player.attack();
+      else this.player.setTarget(tile);
+    }
+
+    eat() {
+      this.player.eat()
+      this.health.add(config.foodHealing)
+    }
+
+    cast(weapon) {
+      if (this.boss.prayer == weapon) this.failedHits++
+      this.boss.hit(weapon)
+      const proj = new Shadow(this.player.position)
+      proj.move(this.boss.position)
+      this.goodProjectiles.push(proj)
+    }
+
+    bossCast(weapon) {
+      if (weapon == this.player.prayer) {
+        this.health.sub(config.hunleffUnavoidableDamage)
+      } else {
+        this.health.sub(config.hunleffAvoidableDamage)
+      }
+      const proj = new Shadow(this.boss.position)
+      proj.move(this.player.position)
+      this.badProjectiles.push(proj)
+    }
+    
+    spawnTornadoes() {
+      this.tornadoes.length = 0
+      const random = () => {
+        return new Coords(rnd(4), rnd(4));
+      }
+      const deltas = [new Coords(0, 0), new Coords(0, 8), new Coords(8, 8), new Coords(8, 0)]
+      for (var i = 0; i < 4; ++i) {
+        this.tornadoes.push(new Unit(this, random().add(deltas[i]), false, /*immobilize=*/1))
+      }
+    }
+
+    spawnFloor() {
+      var next;
+      do { next = rnd(floorPatterns.length) } while (next === this.prevFloor)
+      this.floor = floorPatterns[next].clone()
+      this.prevFloor = next
+    }
+
+    nextTick() {
+      this.tick++
+
+      // Spawn/despawn
+      this.goodProjectiles = []
+      this.badProjectiles = []
+
+      const tornadoInterval = config.tornadoTicks + config.noTornadoTicks
+      if (this.tick % tornadoInterval == this.tornadoOffset) this.spawnTornadoes();
+      if (this.tick % tornadoInterval == (this.tornadoOffset + config.tornadoTicks) % tornadoInterval) this.tornadoes.length = 0;
+
+      const floorInterval = config.lavaTicks + config.lavaNotificationTicks
+      if (this.tick % floorInterval == 0) this.spawnFloor()
+      if (this.tick % floorInterval == config.lavaNotificationTicks) this.floor.active = true
+
+      // Movement
+      for (const tornado of this.tornadoes) {
+        tornado.setTarget(this.player.position)
+        tornado.move()
+      }
+      this.player.move()
+      this.boss.move()
+
+      // Damage
+      const totaldmg = () => { return this.tornadoHits + this.floorHits + this.bossHits}
+      const prevDmg = totaldmg();
+      for (const tornado of this.tornadoes) {
+        if (tornado.position.eq(this.player.position)) {
+          this.tornadoHits++
+          this.health.sub(config.tornadoDamage)
+        }
+      }
+      if (this.floor.active && this.floor.contains(this.player.position)) {
+        this.floorHits++
+        this.health.sub(config.floorDamage)
+      }
+      if (this.boss.area.contains(this.player.position) && this.lastBossHit + config.bossAttackSpeed <= this.tick) {
+        this.bossHits++
+        this.lastBossHit = this.tick
+        this.health.sub(config.bossDamage)
+      }
+      if (prevDmg < totaldmg() && config.sounds) beep()
+      
+      if (this.health.value <= 0 && this.deathTick == null) {
+        this.deathTick = this.tick
+        this.damageAtDeath = this.boss.damageTaken
+      }
+
+      // Info
+      document.getElementById("ticks").innerHTML = this.tick
+      document.getElementById("time").innerHTML = (this.tick * 0.6).toFixed(1)
+
+      if (this.deathTick) {
+        document.getElementById("alive_damage").style.color = "red"
+        document.getElementById("alive_damage").innerHTML = this.damageAtDeath
+        document.getElementById("alive_ticks").style.color = "red"
+        document.getElementById("alive_ticks").innerHTML = this.deathTick
+      } else {
+        document.getElementById("alive_damage").innerHTML = this.boss.damageTaken
+        document.getElementById("alive_ticks").innerHTML = this.tick
+      }
+
+      // Survival Scores
+      document.getElementById("tornado_hits").innerHTML = this.tornadoHits
+      document.getElementById("floor_hits").innerHTML = this.floorHits
+      document.getElementById("boss_hits").innerHTML = this.bossHits
+      const avoidableDamage = (this.tornadoHits * config.tornadoDamage +
+                              this.floorHits * config.floorDamage +
+                              this.bossHits * config.bossDamage)
+      document.getElementById("avoidable_dmg").innerHTML = avoidableDamage.toFixed()
+
+      // Dps
+      const failed = this.failedHits
+      const total = this.player.attacksDone
+      const correct = total - failed
+      const possible = Math.floor((this.tick + 3) / 4)
+
+      document.getElementById("correct_attacks").innerHTML = (correct / possible * 100).toFixed()
+      document.getElementById("failed_attacks").innerHTML = (failed / possible * 100).toFixed()
+      document.getElementById("stalled_attacks").innerHTML = ((possible - total) / possible * 100).toFixed();
+      const dpsPotential = correct / possible
+      document.getElementById("estimated_fish").innerHTML =
+        12 / dpsPotential + (avoidableDamage / this.tick * config.perfectFightTicks / dpsPotential) / 18
+    }
+  }
+
+  // TODO copypasta
+  class Inventory {
+    constructor(elementId, game) {
+      this.canvas = document.getElementById(elementId)
+      this.ctx = this.canvas.getContext("2d")
+      this.game = game
+      this.tileSize = this.canvas.width / 4
+      this.contents = make2darr(4, 7, "F")
+      this.contents[1][4] = "S"
+      
+      this.canvas.addEventListener('click', (e) => {
+        const tile = new Coords(Math.floor(e.offsetX / this.tileSize),
+                                Math.floor(e.offsetY / this.tileSize));
+        this.click(tile)
+        this.draw()
+      })
+    }
+    show() { this.canvas.style.display = "block" }
+    hide() { this.canvas.style.display = "none" }
+
+    click(tile) {
+      const c = this.contents, x = tile.x, y = tile.y;
+      if (c[x][y] == "S" || c[x][y] == "B") {
+        this.game.player.swapWeapon();
+        c[x][y] = c[x][y] == "B" ? "S" : "B"
+      }
+      if (c[x][y] == "F" && this.game.player.canEat()) {
+        this.game.eat();
+        c[x][y] = null
+      }
+    }
+
+    draw() {
+      for (var x = 0; x < 4; ++x) {
+        for (var y = 0; y < 7; ++y) {
+          this.drawTile(new Coords(x, y), colors.bg, colors.border)
+          if (this.contents[x][y] != null) this.drawText(new Coords(x, y), this.contents[x][y], "#fff")
+        }
+      }
+    }
+
+    drawText(pos, text, color) {
+      const fontSize = Math.floor(this.tileSize * 0.5)
+      this.ctx.font = fontSize + "px Arial"
+      this.ctx.textAlign = "center"
+      this.ctx.fillStyle = color
+      this.ctx.fillText(text, (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
+    }
+
+    drawTile(pos, color, borderColor) {
+      const tileSize = this.tileSize
+      if (color != null) {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+      }
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.strokeRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+    }
+  }
+
+  // TODO Another copypasta :)
+  class PrayerBook {
+    constructor(elementId, game) {
+      this.canvas = document.getElementById(elementId)
+      this.ctx = this.canvas.getContext("2d")
+      this.game = game
+      this.tileSize = this.canvas.width / 4
+      this.contents = make2darr(4, 7)
+      this.contents[1][4] = "S"
+      this.contents[2][4] = "B"
+      
+      this.canvas.addEventListener('click', (e) => {
+        const tile = new Coords(Math.floor(e.offsetX / this.tileSize),
+                                Math.floor(e.offsetY / this.tileSize));
+        this.click(tile)
+        this.draw()
+      })
+    }
+    show() { this.canvas.style.display = "block" }
+    hide() { this.canvas.style.display = "none" }
+
+    click(tile) {
+      const next = this.contents[tile.x][tile.y]
+      if (next == null) return
+      if (next === this.game.player.prayer) {
+        this.game.player.prayer = null
+      } else {
+        this.game.player.prayer = next
+      }
+    }
+
+    draw() {
+      for (var x = 0; x < 4; ++x) {
+        for (var y = 0; y < 7; ++y) {
+          this.drawTile(new Coords(x, y), colors.bg, colors.border)
+          if (this.contents[x][y] != null) {
+            var textColor = "#fff"
+            if (this.contents[x][y] == this.game.player.prayer) {
+              this.drawUnit(new Coords(x, y), colors.player, colors.playerBorder)
+              textColor = "#000"
+            }
+            this.drawText(new Coords(x, y), this.contents[x][y], textColor)
+          }
+        }
+      }
+    }
+
+    drawText(pos, text, color) {
+      const fontSize = Math.floor(this.tileSize * 0.5)
+      this.ctx.font = fontSize + "px Arial"
+      this.ctx.textAlign = "center"
+      this.ctx.fillStyle = color
+      this.ctx.fillText(text, (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
+    }
+
+    drawTile(pos, color, borderColor) {
+      const tileSize = this.tileSize
+      if (color != null) {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+      }
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.strokeRect(pos.x * tileSize, pos.y * tileSize, tileSize, tileSize)
+    }
+    
+    drawUnit (pos, color, borderColor, scale = 3) {
+      const tileSize = this.tileSize
+      this.ctx.beginPath();
+      this.ctx.arc(pos.x * tileSize + 0.5 * tileSize, pos.y * tileSize + 0.5 * tileSize, tileSize / scale, 0, 2 * Math.PI)
+      this.ctx.fillStyle = color
+      this.ctx.lineWidth = tileSize / 15
+      this.ctx.strokeStyle = borderColor
+      this.ctx.fill();
+      this.ctx.stroke();
+    }
+  }
+
+  class Health {
+    constructor(elementId, game) {
+      this.canvas = document.getElementById(elementId)
+      this.ctx = this.canvas.getContext("2d")
+      this.value = config.maxHealth
+    }
+    add(value) {
+      this.value += value
+      this.value = Math.min(config.maxHealth, this.value)
+      this.draw()
+    }
+    sub(value) {
+      this.value -= value
+      this.draw()
+    }
+    draw() {
+      const s = this.canvas.width
+      const missingPct = ((config.maxHealth - this.value) / config.maxHealth)
+
+      this.ctx.fillStyle = colors.noHealth
+      this.ctx.fillRect(0, 0, s, s * missingPct)
+      
+      this.ctx.fillStyle = colors.health
+      this.ctx.fillRect(0, missingPct * s, s, s * (1 - missingPct))
+
+      const fontSize = Math.floor(s * 0.5)
+      this.ctx.font = fontSize + "px Arial"
+      this.ctx.textAlign = "center"
+      this.ctx.fillStyle = "#fff"
+      this.ctx.fillText(Math.floor(this.value), s / 2, s / 2 + fontSize * 0.4)
+    }
+  }
+
+  const game = new Game()
+  const board = new Board("board", game)
+  const inventory = new Inventory("inventory", game)
+  inventory.draw()
+  const prayerBook = new PrayerBook("prayer_book", game)
+  prayerBook.draw()
+
+  const draw = () => {
+    board.draw()
+  }
+
+  setInterval(function() { game.nextTick(); }, config.tickLengthMillis)
+
+  document.addEventListener("keypress", function(e) {
+    if (e.key == "1") {
+      inventory.show()
+      prayerBook.hide()
+    }
+    if (e.key == "2") {
+      inventory.hide()
+      prayerBook.show()
+    }
+  });
+
+</script>
