@@ -38,9 +38,11 @@
 
 <div>
   <h2>Options</h2>
-  <div style="display: flex;"><input type="checkbox" id="opts_sounds"/> Enable sounds</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_damageSounds"/> Damage sounds</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_attackSwapSounds"/> Hunllef attack style swap sounds</div>
   <div style="display: flex;"><input type="checkbox" id="opts_freezeScoresOnDeath"/> Freeze scores on death</div>
   <div style="display: flex;"><input type="checkbox" id="opts_showPathing"/> Show pathing</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_hunleffInCorner"/> Spawn Hunllef always in corner.</div>
   <div style="display: flex;"><input type="checkbox" id="opts_showAdditionalStats"/> Show additional stats</div>
 
   <h2>How to play</h2>
@@ -69,10 +71,12 @@
 
 <script>
   var config = {
-    sounds: true,
+    damageSounds: true,
+    attackSwapSounds: true,
     showPathing: true,
     freezeScoresOnDeath: true,
     showAdditionalStats: false,
+    hunleffInCorner: false,
     tickLengthMillis: 600,
     tornadoTicks: 20,
     noTornadoTicks: 30,
@@ -96,6 +100,44 @@
     hunleffFirstAttackTypeCD: 3,
     hunleffUnavoidableDamage: 6.5,
     hunleffAvoidableDamage: 25,
+    // Icons
+    prayMagicChar: "💦",
+    prayRangeChar: "🏹",
+    attackMagicChar: "💦",
+    attackRangeChar: "🏹",
+    fishChar: "🐟",
+  }
+
+
+  // Options handling
+  for (const opt of ["opts_damageSounds", "opts_attackSwapSounds", "opts_showPathing", "opts_freezeScoresOnDeath", "opts_showAdditionalStats", "opts_hunleffInCorner"]) {
+    const configName = opt.substring(5)
+    const fromStorage = JSON.parse(window.localStorage.getItem(opt))
+    if (fromStorage === true || fromStorage === false) {
+      config[configName] = fromStorage
+    }
+    document.getElementById(opt).checked = config[configName]
+    document.getElementById(opt).addEventListener('change', function() {
+      config[configName] = this.checked
+      window.localStorage.setItem(opt, JSON.stringify(config[configName]))
+    });
+  }
+  showAdditional = JSON.parse(window.localStorage.getItem("opts_showAdditionalStats"))
+  document.getElementById("additional_stats").style.display = showAdditional ? "block" : "none"
+  document.getElementById("opts_showAdditionalStats").addEventListener('change', function() {
+    document.getElementById("additional_stats").style.display = this.checked ? "block" : "none"
+  });
+
+  const prayerDisplay = (text) => {
+    if (text == "S") text = config.prayMagicChar;
+    else if (text == "B") text = config.prayRangeChar;
+    return text;
+  }
+  const attackDisplay = (text) => {
+    if (text == "S") text = config.attackMagicChar;
+    else if (text == "B") text = config.attackRangeChar;
+    else if (text == "F") text = config.fishChar;
+    return text;
   }
 
   const colors = {
@@ -220,9 +262,7 @@
     }
 
     attack() {
-      var additional_wait = !this.target.eq(this.position)
       this.setTarget(this.position)
-      this.immobilizeTicks = config.attackImmobilizeTicks + additional_wait 
       this.attacking = true
     }
 
@@ -253,7 +293,7 @@
     }
 
     move() {
-      if (this.path.length > 0 && !this.casting) {
+      if (this.path.length > 0) {
         this.position = this.path[0]
         this.path.shift()
       }
@@ -432,9 +472,9 @@
       } 
       // Boss
       this.drawArea(game.boss.area, colors.boss, colors.bossBorder)
-      this.drawText(game.boss.area.start.add(new Coords(2, 2)), game.boss.prayer, colors.hunleffPrayer)
+      this.drawText(game.boss.area.start.add(new Coords(2, 2)), prayerDisplay(game.boss.prayer), colors.hunleffPrayer)
       this.drawText(game.boss.area.start.add(new Coords(2, 0)), game.boss.damageTaken, colors.hunleffPrayer)
-      this.drawText(game.boss.area.start.add(new Coords(2, 4)), game.boss.weapon, colors.tornadoBorder)
+      this.drawText(game.boss.area.start.add(new Coords(2, 4)), attackDisplay(game.boss.weapon), colors.tornadoBorder)
       // Pathing
       if (config.showPathing) {
         for (const tile of game.player.path) {
@@ -452,10 +492,10 @@
         this.drawUnit(game.player.displayPosition, colors.player, colors.playerBorder)
       }
       if (game.player.weapon != null) {
-        this.drawText(game.player.displayPosition, game.player.weapon, colors.weapon)
+        this.drawText(game.player.displayPosition, attackDisplay(game.player.weapon), colors.weapon)
       }
       if (game.player.prayer != null) {
-        this.drawPrayer(game.player.displayPosition, game.player.prayer, colors.playerPrayer, colors.playerPrayerBorder)
+        this.drawPrayer(game.player.displayPosition, prayerDisplay(game.player.prayer), colors.playerPrayer, colors.playerPrayerBorder)
       }
       // Tornadoes
       for (const tornado of game.tornadoes) {
@@ -473,9 +513,24 @@
 
   const rnd = (limit) => Math.floor(Math.random() * limit)
 
+  function beeper(vol, freq, duration){
+    a=new AudioContext() // browsers limit the number of concurrent audio contexts, so you better re-use'em
+    v=a.createOscillator()
+    u=a.createGain()
+    v.connect(u)
+    v.frequency.value=freq
+    v.type="square"
+    u.gain.value=vol
+    u.connect(a.destination)
+    v.start(a.currentTime)
+    v.stop(a.currentTime+duration*0.001)
+  }
+  
   function beep() {
-    var snd = new Audio("data:audio/wav;base64,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qJrx4KOQjahZxWbcZgztj2c49nKmkId44S71j0c8eV9yDK6uPRzx5X18eDvjvQ6yKo9ZSS6l//8elePK/Lf//IInrOF/FvDoADYAGBMGb7FtErm5MXMlmPAJQVgWta7Zx2go+8xJ0UiCb8LHHdftWyLJE0QIAIsI+UbXu67dZMjmgDGCGl1H+vpF4NSDckSIkk7Vd+sxEhBQMRU8j/12UIRhzSaUdQ+rQU5kGeFxm+hb1oh6pWWmv3uvmReDl0UnvtapVaIzo1jZbf/pD6ElLqSX+rUmOQNpJFa/r+sa4e/pBlAABoAAAAA3CUgShLdGIxsY7AUABPRrgCABdDuQ5GC7DqPQCgbbJUAoRSUj+NIEig0YfyWUho1VBBBA//uQZB4ABZx5zfMakeAAAAmwAAAAF5F3P0w9GtAAACfAAAAAwLhMDmAYWMgVEG1U0FIGCBgXBXAtfMH10000EEEEEECUBYln03TTTdNBDZopopYvrTTdNa325mImNg3TTPV9q3pmY0xoO6bv3r00y+IDGid/9aaaZTGMuj9mpu9Mpio1dXrr5HERTZSmqU36A3CumzN/9Robv/Xx4v9ijkSRSNLQhAWumap82WRSBUqXStV/YcS+XVLnSS+WLDroqArFkMEsAS+eWmrUzrO0oEmE40RlMZ5+ODIkAyKAGUwZ3mVKmcamcJnMW26MRPgUw6j+LkhyHGVGYjSUUKNpuJUQoOIAyDvEyG8S5yfK6dhZc0Tx1KI/gviKL6qvvFs1+bWtaz58uUNnryq6kt5RzOCkPWlVqVX2a/EEBUdU1KrXLf40GoiiFXK///qpoiDXrOgqDR38JB0bw7SoL+ZB9o1RCkQjQ2CBYZKd/+VJxZRRZlqSkKiws0WFxUyCwsKiMy7hUVFhIaCrNQsKkTIsLivwKKigsj8XYlwt/WKi2N4d//uQRCSAAjURNIHpMZBGYiaQPSYyAAABLAAAAAAAACWAAAAApUF/Mg+0aohSIRobBAsMlO//Kk4soosy1JSFRYWaLC4qZBYWFRGZdwqKiwkNBVmoWFSJkWFxX4FFRQWR+LsS4W/rFRb/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////VEFHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU291bmRib3kuZGUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMjAwNGh0dHA6Ly93d3cuc291bmRib3kuZGUAAAAAAAAAACU=");  
-    snd.play();
+    beeper(0.05, 400, 100)
+  }
+  function boop() {
+    beeper(0.1, 100, 200)
   }
 
   class Hunleff {
@@ -496,6 +551,7 @@
       }
     }
     move() {
+      console.log(config.attackSwapSounds)
       if (this.prayerCD == 0) {
         this.prayer = this.prayer == "B" ? "S" : "B"
         this.prayerCD = config.hunleffPrayerSwapHits
@@ -509,6 +565,7 @@
       if (this.weaponCD == 0) {
         this.weapon = this.weapon == "B" ? "S" : "B"
         this.weaponCD = config.hunleffAttackTypeCD
+        if (config.attackSwapSounds) boop()
       }
     }
     get position() {
@@ -521,7 +578,11 @@
       this.player = new Unit(this, new Coords(5, 3), true);
       this.health = new Health("health")
       this.health.draw()
-      this.boss = new Hunleff(this, new Area(new Coords(rnd(5) + 1, rnd(5) + 1), 5, 5));
+      if (config.hunleffInCorner) {
+        this.boss = new Hunleff(this, new Area(new Coords(rnd(2) * 5 + 1, rnd(2) * 5 + 1), 5, 5));
+      } else {
+        this.boss = new Hunleff(this, new Area(new Coords(rnd(5) + 1, rnd(5) + 1), 5, 5));
+      }
       this.tornadoes = []
       this.floor = new Floor([])
       this.goodProjectiles = []
@@ -629,7 +690,7 @@
         this.lastBossHit = this.tick
         this.health.subAvoidable(config.bossDamage)
       }
-      if (prevDmg < totaldmg() && config.sounds) beep()
+      if (prevDmg < totaldmg() && config.damageSounds) beep()
 
       if (this.tick == 0) return;
       // Info
@@ -729,7 +790,7 @@
       this.ctx.font = fontSize + "px Arial"
       this.ctx.textAlign = "center"
       this.ctx.fillStyle = color
-      this.ctx.fillText(text, (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
+      this.ctx.fillText(attackDisplay(text), (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
     }
 
     drawTile(pos, color, borderColor) {
@@ -796,7 +857,7 @@
       this.ctx.font = fontSize + "px Arial"
       this.ctx.textAlign = "center"
       this.ctx.fillStyle = color
-      this.ctx.fillText(text, (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
+      this.ctx.fillText(prayerDisplay(text), (pos.x + 0.5) * this.tileSize, (pos.y + 0.5) * this.tileSize + fontSize * 0.4)
     }
 
     drawTile(pos, color, borderColor) {
@@ -887,23 +948,4 @@
       prayerBook.show()
     }
   });
-  
-  for (const opt of ["opts_sounds", "opts_showPathing", "opts_freezeScoresOnDeath", "opts_showAdditionalStats"]) {
-    const configName = opt.substring(5)
-    const fromStorage = JSON.parse(window.localStorage.getItem(opt))
-    if (fromStorage === true || fromStorage === false) {
-      config[configName] = fromStorage
-    }
-    document.getElementById(opt).checked = config[configName]
-    document.getElementById(opt).addEventListener('change', function() {
-      config[configName] = this.checked
-      window.localStorage.setItem(opt, JSON.stringify(config[configName]))
-    });
-  }
-  showAdditional = JSON.parse(window.localStorage.getItem("opts_showAdditionalStats"))
-  document.getElementById("additional_stats").style.display = showAdditional ? "block" : "none"
-  document.getElementById("opts_showAdditionalStats").addEventListener('change', function() {
-    document.getElementById("additional_stats").style.display = this.checked ? "block" : "none"
-  });
-
 </script>
