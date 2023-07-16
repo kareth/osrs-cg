@@ -42,6 +42,7 @@
   <div style="display: flex;"><input type="checkbox" id="opts_attackSwapSounds"/> Hunllef attack style swap sounds</div>
   <div style="display: flex;"><input type="checkbox" id="opts_freezeScoresOnDeath"/> Freeze scores on death</div>
   <div style="display: flex;"><input type="checkbox" id="opts_showPathing"/> Show pathing</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_tornadoTrueTile"/> Show tornado true tiles</div>
   <div style="display: flex;"><input type="checkbox" id="opts_hunleffInCorner"/> Spawn Hunllef always in corner.</div>
   <div style="display: flex;"><input type="checkbox" id="opts_showAdditionalStats"/> Show additional stats</div>
 
@@ -77,6 +78,7 @@
     freezeScoresOnDeath: true,
     showAdditionalStats: false,
     hunleffInCorner: false,
+    tornadoTrueTile: false,
     tickLengthMillis: 600,
     tornadoTicks: 20,
     noTornadoTicks: 30,
@@ -110,7 +112,8 @@
 
 
   // Options handling
-  for (const opt of ["opts_damageSounds", "opts_attackSwapSounds", "opts_showPathing", "opts_freezeScoresOnDeath", "opts_showAdditionalStats", "opts_hunleffInCorner"]) {
+  for (const opt of ["opts_damageSounds", "opts_attackSwapSounds", "opts_showPathing", "opts_freezeScoresOnDeath",
+                     "opts_showAdditionalStats", "opts_hunleffInCorner", "opts_tornadoTrueTile"]) {
     const configName = opt.substring(5)
     const fromStorage = JSON.parse(window.localStorage.getItem(opt))
     if (fromStorage === true || fromStorage === false) {
@@ -500,6 +503,9 @@
       // Tornadoes
       for (const tornado of game.tornadoes) {
         this.drawUnit(tornado.displayPosition, colors.tornado, colors.tornadoBorder)
+        if (config.tornadoTrueTile) {
+          this.drawTile(tornado.position, null, colors.tornado)
+        }
       }
       // Projectiles
       for (const p of game.badProjectiles) {
@@ -551,7 +557,6 @@
       }
     }
     move() {
-      console.log(config.attackSwapSounds)
       if (this.prayerCD == 0) {
         this.prayer = this.prayer == "B" ? "S" : "B"
         this.prayerCD = config.hunleffPrayerSwapHits
