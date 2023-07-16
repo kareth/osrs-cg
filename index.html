@@ -484,6 +484,12 @@
           this.drawTile(tile, null, colors.pathBorder)
         } 
       }
+      // Tornado true tiles (under player prayer)
+      for (const tornado of game.tornadoes) {
+        if (config.tornadoTrueTile) {
+          this.drawTile(tornado.position, null, colors.tornado)
+        }
+      }
       // Player
       this.drawTile(game.player.target, null, colors.targetBorder)
       this.drawTile(game.player.position, null, colors.playerTileBorder)
@@ -503,9 +509,6 @@
       // Tornadoes
       for (const tornado of game.tornadoes) {
         this.drawUnit(tornado.displayPosition, colors.tornado, colors.tornadoBorder)
-        if (config.tornadoTrueTile) {
-          this.drawTile(tornado.position, null, colors.tornado)
-        }
       }
       // Projectiles
       for (const p of game.badProjectiles) {
