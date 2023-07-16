@@ -60,7 +60,7 @@
 
   <h2>Learning tips</h2>
   <ul></ul>
-  <li>Ignore attacks, and prayers first. Only focus on running around and not getting hit by floor and tornadoes.</li>
+  <li>Ignore attacks and prayers first. Only focus on running around and not getting hit by floor and tornadoes.</li>
   <li>Once that's mastered, start switching prayers. Aim for surviving whole game with near 100% survival efficiency (you can disable score freezing on death in options to help track this)</li>
   <li>Finally throw in attacks and weapon switches and start maximizing damage</li>
   </ul>
@@ -629,7 +629,6 @@
         this.lastBossHit = this.tick
         this.health.subAvoidable(config.bossDamage)
       }
-      console.log("shouldbeep", config.sounds)
       if (prevDmg < totaldmg() && config.sounds) beep()
 
       if (this.tick == 0) return;
@@ -899,7 +898,6 @@
     document.getElementById(opt).addEventListener('change', function() {
       config[configName] = this.checked
       window.localStorage.setItem(opt, JSON.stringify(config[configName]))
-      console.log(configName, config[configName])
     });
   }
   showAdditional = JSON.parse(window.localStorage.getItem("opts_showAdditionalStats"))
