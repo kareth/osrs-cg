@@ -22,24 +22,57 @@
     <canvas id="prayer_book" width="200" height="350" style="display: none;"></canvas>
   </div>
 </div>
-<div style="margin: 10px;">
+<div id="additional_stats" style="margin: 10px; display: none;">
+  <h2>Additional stats</h2>
   <div>Ticks: <span id="ticks"></span> (<span id="time"></span>s)</div>
-  <div>Tornado hits: <span id="tornado_hits"></span>
-  <div>Floor hits: <span id="floor_hits"></span>
-  <div>Boss hits: <span id="boss_hits"></span>
-  <div>Avoidable DMG: <span id="avoidable_dmg"></span>
-  <div>Correct attack time: <span id="correct_attacks"></span>%
-  <div>Failed attack time: <span id="failed_attacks"></span>%
-  <div>Eating time: <span id="eat_attacks"></span>%
-  <div>Stalled time: <span id="stalled_attacks"></span>%
-  <div>Estimated fish: <span id="estimated_fish"></span>
-  <div>Tips: Prayerbook/Inventory on 1/2. Click hunleff helper first and then immediately refresh page.</div>
+  <div>Tornado hits: <span id="tornado_hits"></span></div>
+  <div>Floor hits: <span id="floor_hits"></span></div>
+  <div>Boss hits: <span id="boss_hits"></span></div>
+  <div>Avoidable dmg: <span id="avoidable_dmg"></span></div>
+  <div>Unavoidable dmg: <span id="unavoidable_dmg"></span></div>
+  <div>Correct attack time: <span id="correct_attacks"></span>%</div>
+  <div>Failed attack time: <span id="failed_attacks"></span>%</div>
+  <div>Eating time: <span id="eat_attacks"></span>%</div>
+  <div>Stalled time: <span id="stalled_attacks"></span>%</div>
+</div>
+
+<div>
+  <h2>Options</h2>
+  <div style="display: flex;"><input type="checkbox" id="opts_sounds"/> Enable sounds</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_freezeScoresOnDeath"/> Freeze scores on death</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_showPathing"/> Show pathing</div>
+  <div style="display: flex;"><input type="checkbox" id="opts_showAdditionalStats"/> Show additional stats</div>
+
+  <h2>How to play</h2>
+  <ul>
+    <li>Refresh page to restart.</li>
+    <li>Switch between inventory and prayer book with 1 and 2 keyboard keys.</li>
+    <li>You can synchronize Hunllef Helper by starting it and then immediately refreshing the page to start new game.</li>
+    <li>Idle player is yellow. Attacking player is blue. Player during the casting tick (immobilized) is lighter blue.</li>
+    <li>Black floor is safe. Red floor shows where unsafe floor will appear in 3 ticks. Yellow floor is unsafe.</li>
+    <li>Red circles are tornadoes. They are very unsafe.</li>
+    <li>The setup uses two combat styles B(ow) and S(taff). Big letter on the player is their currently equipped weapon. Small letter on the top is prayer.</li>
+    <li>Hunllef is white and standing on it is unsafe (stomp doesn't delay the attacks). Prayer is in the middle, attack style on bottom, and total damage taken on top.</li>
+    <li>B(ow)/S(taff) in the inventory swaps the weapon. In the prayer book it swaps the prayer. F(ish) in inventory heals.</li>
+    <li>Game keeps track of your performance. Once your health reaches 0, your stats will freeze and turn red (can be disabled in options).</li>
+    <li>Once you start reaching 500-600 damage and 80/80 performance, you should be more than ready for the real CG fight.</li>
+  </ul>
+
+  <h2>Learning tips</h2>
+  <ul></ul>
+  <li>Ignore attacks, and prayers first. Only focus on running around and not getting hit by floor and tornadoes.</li>
+  <li>Once that's mastered, start switching prayers. Aim for surviving whole game with near 100% survival efficiency (you can disable score freezing on death in options to help track this)</li>
+  <li>Finally throw in attacks and weapon switches and start maximizing damage</li>
+  </ul>
+  <br/>Good luck!
 </div>
 
 <script>
-  const config = {
+  var config = {
     sounds: true,
     showPathing: true,
+    freezeScoresOnDeath: true,
+    showAdditionalStats: false,
     tickLengthMillis: 600,
     tornadoTicks: 20,
     noTornadoTicks: 30,
@@ -596,6 +629,7 @@
         this.lastBossHit = this.tick
         this.health.subAvoidable(config.bossDamage)
       }
+      console.log("shouldbeep", config.sounds)
       if (prevDmg < totaldmg() && config.sounds) beep()
 
       if (this.tick == 0) return;
@@ -607,10 +641,8 @@
       document.getElementById("tornado_hits").innerHTML = this.tornadoHits
       document.getElementById("floor_hits").innerHTML = this.floorHits
       document.getElementById("boss_hits").innerHTML = this.bossHits
-      const avoidableDamage = (this.tornadoHits * config.tornadoDamage +
-                              this.floorHits * config.floorDamage +
-                              this.bossHits * config.bossDamage)
-      document.getElementById("avoidable_dmg").innerHTML = avoidableDamage.toFixed()
+      document.getElementById("avoidable_dmg").innerHTML = this.health.avoidableDamage.toFixed()
+      document.getElementById("unavoidable_dmg").innerHTML = this.health.unavoidableDamage.toFixed()
 
       // Dps
       const failed = this.failedHits * config.attackSpeed
@@ -624,9 +656,6 @@
       document.getElementById("eat_attacks").innerHTML = (eat / possible * 100).toFixed();
       document.getElementById("stalled_attacks").innerHTML = ((possible - total - eat) / possible * 100).toFixed();
       const dpsPotential = (correct + eat) / possible
-      document.getElementById("estimated_fish").innerHTML =
-        12 / dpsPotential + (avoidableDamage / this.tick * config.perfectFightTicks / dpsPotential) / 18
-
       const survivalPotential = this.health.unavoidableDamage / (this.health.avoidableDamage + this.health.unavoidableDamage)
 
       const currentScore = {
@@ -646,7 +675,7 @@
         }
       }
       {
-        const score = this.deathScore == null ? currentScore : this.deathScore;
+        const score = this.deathScore == null || !config.freezeScoresOnDeath ? currentScore : this.deathScore;
         document.getElementById("alive_damage").innerHTML = score.damage
         document.getElementById("alive_ticks").innerHTML = score.tick
         document.getElementById("alive_damage_eff").innerHTML = (score.damage_eff * 100).toFixed() + "%"
@@ -858,6 +887,25 @@
       inventory.hide()
       prayerBook.show()
     }
+  });
+  
+  for (const opt of ["opts_sounds", "opts_showPathing", "opts_freezeScoresOnDeath", "opts_showAdditionalStats"]) {
+    const configName = opt.substring(5)
+    const fromStorage = JSON.parse(window.localStorage.getItem(opt))
+    if (fromStorage === true || fromStorage === false) {
+      config[configName] = fromStorage
+    }
+    document.getElementById(opt).checked = config[configName]
+    document.getElementById(opt).addEventListener('change', function() {
+      config[configName] = this.checked
+      window.localStorage.setItem(opt, JSON.stringify(config[configName]))
+      console.log(configName, config[configName])
+    });
+  }
+  showAdditional = JSON.parse(window.localStorage.getItem("opts_showAdditionalStats"))
+  document.getElementById("additional_stats").style.display = showAdditional ? "block" : "none"
+  document.getElementById("opts_showAdditionalStats").addEventListener('change', function() {
+    document.getElementById("additional_stats").style.display = this.checked ? "block" : "none"
   });
 
 </script>
